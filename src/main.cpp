@@ -11,14 +11,9 @@
  */
 #include <Indio.h>
 #include <Wire.h>
+#include <U8g2lib.h>
 
-#include <UC1701.h>
-// Download libary from https://github.com/Industruino/
-
-// A custom glyph (a smiley)...
-static const byte glyph[] = {B00010000, B00110100, B00110000, B00110100, B00010000};
-
-static UC1701 lcd;
+U8G2_UC1701_MINI12864_F_2ND_4W_HW_SPI lcd(U8G2_R2, /* cs=*/19, /* dc=*/22);
 
 // menu defines
 
@@ -125,16 +120,14 @@ void setup()
   pinMode(backlightPin, OUTPUT);                                      // set backlight pin to output
   analogWrite(backlightPin, (map(backlightIntensity, 5, 1, 255, 0))); // convert backlight intesity from a value of 0-5 to a value of 0-255 for PWM.
   // LCD init
-  lcd.begin(); // sets the resolution of the LCD screen
-
-  for (int y = 0; y <= 7; y++)
-  {
-    for (int x = 0; x <= 128; x++)
-    {
-      lcd.setCursor(x, y);
-      lcd.print(" ");
-    }
-  }
+  lcd.begin();
+  lcd.clearBuffer();
+  lcd.setMaxClipWindow();
+  lcd.setFont(u8g2_font_6x12_tr);
+  lcd.setDrawColor(0); // set color to blank
+  lcd.drawBox(0, 0, 128, 64);
+  lcd.sendBuffer(); // update screen now
+  lcd.setDrawColor(1); // set color to black
 
   // debug
   SerialUSB.begin(9600); // enables port for debugging messages
@@ -176,12 +169,13 @@ void MenuWelcome()
   MenuLevel = 0;       // menu tree depth -> first level
   MenuID = 0;          // unique menu id -> has to be unique for each menu on the same menu level.
   enterPressed = 0;    // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
-  lcd.clear();         // clear the screen
+  lcd.clearBuffer();   // clear the screen
   // actual user content on the screen
-  lcd.setCursor(5, 1);       // set the cursor to the fifth pixel from the left edge, third row.
-  lcd.print("Welcome to");   // print text on screen
-  lcd.setCursor(5, 2);       // set the cursor to the fifth pixel from the left edge, third row.
-  lcd.print("Industruino!"); // print text on screen
+  lcd.setCursor(5, 8 * (1 + 1)); // set the cursor to the fifth pixel from the left edge, third row.
+  lcd.print("Welcome to");       // print text on screen
+  lcd.setCursor(5, 8 * (2 + 1)); // set the cursor to the fifth pixel from the left edge, third row.
+  lcd.print("Industruino!");     // print text on screen
+  lcd.sendBuffer();              // update screen now
   delay(2000);
 }
 
@@ -194,17 +188,18 @@ void MenuSelect()
   MenuLevel = 1;      // menu tree depth -> second level
   MenuID = 1;         // unique menu id -> has to be unique for each menu on the same menu level.
   enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
-  lcd.clear();        // clear the screen
+  lcd.clearBuffer();  // clear the screen
   ScrollCursor();     // enable the moving cursor (note that this function is not called in the splash screen, thus disabling the cursor)
   // actual user content on the screen
-  lcd.setCursor(6, 0);          // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Please select");   // print text on screen
-  lcd.setCursor(6, 1);          // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Baseboard type:"); // print text on screen
-  lcd.setCursor(6, 3);          // set the cursor to the sixth pixel from the left edge, second row.
-  lcd.print("IND.I/O");         // print text on screen
-  lcd.setCursor(6, 4);          // set the cursor to the sixth pixel from the left edge, third row.
-  lcd.print("PROTO");           // print text on screen
+  lcd.setCursor(6, 8 * (0 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
+  lcd.print("Please select");    // print text on screen
+  lcd.setCursor(6, 8 * (1 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
+  lcd.print("Baseboard type:");  // print text on screen
+  lcd.setCursor(6, 8 * (3 + 1)); // set the cursor to the sixth pixel from the left edge, second row.
+  lcd.print("IND.I/O");          // print text on screen
+  lcd.setCursor(6, 8 * (4 + 1)); // set the cursor to the sixth pixel from the left edge, third row.
+  lcd.print("PROTO");            // print text on screen
+  lcd.sendBuffer();              // update screen now
 }
 
 void MenuMain()
@@ -215,15 +210,16 @@ void MenuMain()
   MenuLevel = 1;      // menu tree depth -> second level
   MenuID = 1;         // unique menu id -> has to be unique for each menu on the same menu level.
   enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
-  lcd.clear();        // clear the screen
+  lcd.clearBuffer();  // clear the screen
   ScrollCursor();     // enable the moving cursor (note that this function is not called in the splash screen, thus disabling the cursor)
   // actual user content on the screen
-  lcd.setCursor(6, 0); // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Setup");  // print text on screen
-  lcd.setCursor(6, 1); // set the cursor to the sixth pixel from the left edge, second row.
-  lcd.print("Demo");   // print text on screen
-  lcd.setCursor(6, 2); // set the cursor to the sixth pixel from the left edge, third row.
-  lcd.print("Back");   // print text on screen
+  lcd.setCursor(6, 8 * (0 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
+  lcd.print("Setup");            // print text on screen
+  lcd.setCursor(6, 8 * (1 + 1)); // set the cursor to the sixth pixel from the left edge, second row.
+  lcd.print("Demo");             // print text on screen
+  lcd.setCursor(6, 8 * (2 + 1)); // set the cursor to the sixth pixel from the left edge, third row.
+  lcd.print("Back");             // print text on screen
+  lcd.sendBuffer();              // update screen now
 }
 
 void MenuSetup()
@@ -234,16 +230,17 @@ void MenuSetup()
   MenuID = 9;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("BackLight     ");
-  lcd.setCursor(65, 0);
+  lcd.setCursor(65, 8 * (0 + 1));
   lcd.print(backlightIntensity, 1);
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("Reset param.");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuParametersReset()
@@ -254,18 +251,19 @@ void MenuParametersReset()
   MenuID = 10;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("Set system");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("to default");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("settings?");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("OK?");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("Cancel");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDemoProto()
@@ -276,16 +274,17 @@ void MenuDemoProto()
   MenuID = 3;
   MenuLevel = 2;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("DigitalOut");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("DigitalIn");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("AnalogIn");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalOut1()
@@ -297,20 +296,21 @@ void MenuDigitalOut1()
   MenuID = 1;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D0");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D1");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D2");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D3");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D4");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D5");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalOut1Indio()
@@ -322,20 +322,21 @@ void MenuDigitalOut1Indio()
   MenuID = 1;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D0");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D1");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D2");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D3");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D4");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D5");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalOut2()
@@ -346,20 +347,21 @@ void MenuDigitalOut2()
   MenuID = 2;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D6");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D7");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D8");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D9");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D10");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D11");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalOut3()
@@ -370,20 +372,21 @@ void MenuDigitalOut3()
   MenuID = 3;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D12");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D14");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D15");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D16");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D17");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalIn1()
@@ -395,29 +398,30 @@ void MenuDigitalIn1()
   MenuID = 4;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuDigitalIn1Live();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalIn1Live()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D0  ");
   lcd.print(digitalRead(0));
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D1  ");
   lcd.print(digitalRead(1));
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D2  ");
   lcd.print(digitalRead(2));
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D3  ");
   lcd.print(digitalRead(3));
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D4  ");
   lcd.print(digitalRead(4));
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D5  ");
   lcd.print(digitalRead(5));
 }
@@ -430,36 +434,37 @@ void MenuDigitalIn2()
   MenuID = 5;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuDigitalIn2Live();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalIn2Live()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D6  ");
   lcd.print(digitalRead(6));
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D7  ");
   lcd.print(digitalRead(7));
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D8  ");
   lcd.print(digitalRead(8));
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D9  ");
   lcd.print(digitalRead(9));
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D10 ");
   lcd.print(digitalRead(10));
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D11 ");
   lcd.print(digitalRead(11));
 }
 
 void MenuDigitalIn3()
 {
-  lcd.clear();
+  lcd.clearBuffer();
   channel = 5;
   channelUpLimit = 5;
   channelLowLimit = 4;
@@ -468,26 +473,27 @@ void MenuDigitalIn3()
   enterPressed = 0;
   ScrollCursor();
   MenuDigitalIn2Live();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalIn3Live()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D12 ");
   lcd.print(digitalRead(12));
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D14 ");
   lcd.print(digitalRead(14));
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D15 ");
   lcd.print(digitalRead(15));
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D16 ");
   lcd.print(digitalRead(16));
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D17 ");
   lcd.print(digitalRead(17));
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("Back   ");
 }
 
@@ -499,20 +505,21 @@ void AnalogOut1()
   MenuID = 8;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("D0");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("D1");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("D3");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("D5");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("D6");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("D7");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogIn1()
@@ -524,34 +531,35 @@ void MenuAnalogIn1()
   MenuID = 7;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuAnalogIn1Live();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogIn1Live()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("A0           ");
-  lcd.setCursor(30, 0);
+  lcd.setCursor(30, 8 * (0 + 1));
   lcd.print(analogRead(0));
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("A10           ");
-  lcd.setCursor(30, 1);
+  lcd.setCursor(30, 8 * (1 + 1));
   lcd.print(analogRead(10));
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("A11           ");
-  lcd.setCursor(30, 2);
+  lcd.setCursor(30, 8 * (2 + 1));
   lcd.print(analogRead(11));
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("A12           ");
-  lcd.setCursor(30, 3);
+  lcd.setCursor(30, 8 * (3 + 1));
   lcd.print(analogRead(12));
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("A13           ");
-  lcd.setCursor(30, 4);
+  lcd.setCursor(30, 8 * (4 + 1));
   lcd.print(analogRead(13));
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("Back   ");
 }
 
@@ -566,24 +574,25 @@ void MenuDemoInd()
   MenuID = 11;
   MenuLevel = 2;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("Digital Input");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("Digital Output");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("Analog Input  0-10V");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("Analog Input  0-20mA");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("Analog Output 0-10V");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("Analog Output 0-20mA");
-  lcd.setCursor(6, 6);
+  lcd.setCursor(6, 8 * (6 + 1));
   lcd.print("LCD backlight");
-  lcd.setCursor(6, 7);
+  lcd.setCursor(6, 8 * (7 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalOutInd()
@@ -600,24 +609,25 @@ void MenuDigitalOutInd()
   MenuID = 12;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("CH3");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("CH4");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("CH5");
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("CH6");
-  lcd.setCursor(6, 6);
+  lcd.setCursor(6, 8 * (6 + 1));
   lcd.print("CH7");
-  lcd.setCursor(6, 7);
+  lcd.setCursor(6, 8 * (7 + 1));
   lcd.print("CH8");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalInInd()
@@ -635,35 +645,36 @@ void MenuDigitalInInd()
   MenuID = 14;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuDigitalIn1Live();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuDigitalInLiveInd()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1  ");
   lcd.print(Indio.digitalRead(1));
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2  ");
   lcd.print(Indio.digitalRead(2));
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("CH3  ");
   lcd.print(Indio.digitalRead(3));
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("CH4  ");
   lcd.print(Indio.digitalRead(4));
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("CH5  ");
   lcd.print(Indio.digitalRead(5));
-  lcd.setCursor(6, 5);
+  lcd.setCursor(6, 8 * (5 + 1));
   lcd.print("CH6  ");
   lcd.print(Indio.digitalRead(6));
-  lcd.setCursor(6, 6);
+  lcd.setCursor(6, 8 * (6 + 1));
   lcd.print("CH7  ");
   lcd.print(Indio.digitalRead(7));
-  lcd.setCursor(6, 7);
+  lcd.setCursor(6, 8 * (7 + 1));
   lcd.print("CH8  ");
   lcd.print(Indio.digitalRead(8));
 }
@@ -683,22 +694,23 @@ void MenuAnalogOut20mAInd()
   MenuID = 16;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1");
-  lcd.setCursor(35, 0);
+  lcd.setCursor(35, 8 * (0 + 1));
   lcd.print(anOutCh1);
-  lcd.setCursor(70, 0);
+  lcd.setCursor(70, 8 * (0 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2");
-  lcd.setCursor(35, 1);
+  lcd.setCursor(35, 8 * (1 + 1));
   lcd.print(anOutCh2);
-  lcd.setCursor(70, 1);
+  lcd.setCursor(70, 8 * (1 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogOut10VInd()
@@ -716,22 +728,23 @@ void MenuAnalogOut10VInd()
   MenuID = 17;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1");
-  lcd.setCursor(35, 0);
+  lcd.setCursor(35, 8 * (0 + 1));
   lcd.print(anOutCh1, 2);
-  lcd.setCursor(70, 0);
+  lcd.setCursor(70, 8 * (0 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2");
-  lcd.setCursor(35, 1);
+  lcd.setCursor(35, 8 * (1 + 1));
   lcd.print(anOutCh2, 1);
-  lcd.setCursor(70, 1);
+  lcd.setCursor(70, 8 * (1 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("Back");
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogIn20mAInd()
@@ -747,38 +760,39 @@ void MenuAnalogIn20mAInd()
   MenuID = 18;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuAnalogIn20mALiveInd();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogIn20mALiveInd()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1           ");
-  lcd.setCursor(35, 0);
+  lcd.setCursor(35, 8 * (0 + 1));
   lcd.print(Indio.analogRead(1));
-  lcd.setCursor(67, 0);
+  lcd.setCursor(67, 8 * (0 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2           ");
-  lcd.setCursor(35, 1);
+  lcd.setCursor(35, 8 * (1 + 1));
   lcd.print(Indio.analogRead(2));
-  lcd.setCursor(67, 1);
+  lcd.setCursor(67, 8 * (1 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("CH3           ");
-  lcd.setCursor(35, 2);
+  lcd.setCursor(35, 8 * (2 + 1));
   lcd.print(Indio.analogRead(3));
-  lcd.setCursor(67, 2);
+  lcd.setCursor(67, 8 * (2 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("CH4           ");
-  lcd.setCursor(35, 3);
+  lcd.setCursor(35, 8 * (3 + 1));
   lcd.print(Indio.analogRead(4));
-  lcd.setCursor(67, 3);
+  lcd.setCursor(67, 8 * (3 + 1));
   lcd.print("mA");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("Back   ");
 }
 
@@ -795,38 +809,39 @@ void MenuAnalogIn10VInd()
   MenuID = 19;
   MenuLevel = 3;
   enterPressed = 0;
-  lcd.clear();
+  lcd.clearBuffer();
   ScrollCursor();
   MenuAnalogIn10VLiveInd();
+  lcd.sendBuffer(); // update screen now
 }
 
 void MenuAnalogIn10VLiveInd()
 {
-  lcd.setCursor(6, 0);
+  lcd.setCursor(6, 8 * (0 + 1));
   lcd.print("CH1           ");
-  lcd.setCursor(35, 0);
+  lcd.setCursor(35, 8 * (0 + 1));
   lcd.print(Indio.analogRead(1));
-  lcd.setCursor(67, 0);
+  lcd.setCursor(67, 8 * (0 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 1);
+  lcd.setCursor(6, 8 * (1 + 1));
   lcd.print("CH2           ");
-  lcd.setCursor(35, 1);
+  lcd.setCursor(35, 8 * (1 + 1));
   lcd.print(Indio.analogRead(2));
-  lcd.setCursor(67, 1);
+  lcd.setCursor(67, 8 * (1 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(6, 8 * (2 + 1));
   lcd.print("CH3           ");
-  lcd.setCursor(35, 2);
+  lcd.setCursor(35, 8 * (2 + 1));
   lcd.print(Indio.analogRead(3));
-  lcd.setCursor(67, 2);
+  lcd.setCursor(67, 8 * (2 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 3);
+  lcd.setCursor(6, 8 * (3 + 1));
   lcd.print("CH4           ");
-  lcd.setCursor(35, 3);
+  lcd.setCursor(35, 8 * (3 + 1));
   lcd.print(Indio.analogRead(4));
-  lcd.setCursor(67, 3);
+  lcd.setCursor(67, 8 * (3 + 1));
   lcd.print("V");
-  lcd.setCursor(6, 4);
+  lcd.setCursor(6, 8 * (4 + 1));
   lcd.print("Back   ");
 }
 
@@ -902,13 +917,13 @@ void Navigate()
 
         if (buttonEnterState == LOW)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print("*");
         }
 
         if (buttonEnterState == HIGH)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print(">");
         }
 
@@ -945,13 +960,13 @@ void Navigate()
 
         if (buttonEnterState == LOW)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print("*");
         }
 
         if (buttonEnterState == HIGH)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print(">");
         }
 
@@ -996,13 +1011,13 @@ void Navigate()
 
         if (buttonEnterState == LOW)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print("*");
         }
 
         if (buttonEnterState == HIGH)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print(">");
         }
 
@@ -1040,13 +1055,13 @@ void Navigate()
 
         if (buttonEnterState == LOW)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print("*");
         }
 
         if (buttonEnterState == HIGH)
         {
-          lcd.setCursor(0, channel);
+          lcd.setCursor(0, 8 * (channel + 1));
           lcd.print(">");
         }
 
@@ -1247,7 +1262,7 @@ float EditValue() // a function to edit a variable using the UI - function is ca
   while (enterPressed != 1)
   {                // stays in 'value editing mode' until enter is pressed
     ReadButtons(); // check the buttons for any change
-    lcd.setCursor(0, row);
+    lcd.setCursor(0, 8 * (row + 1));
     lcd.print("*");
     if (channel != lastChannel)
     { // when up or down button is pressed
@@ -1262,16 +1277,18 @@ float EditValue() // a function to edit a variable using the UI - function is ca
       // clear a section of a row to make space for updated value
       for (int i = 60; i <= 70; i++)
       {
-        lcd.setCursor(i, row);
-        lcd.print("   ");
+        lcd.setDrawColor(0);
+        lcd.drawBox(i, 8 * row, 6 * 3, 8 * (row + 1));
+        lcd.setDrawColor(1);
       }
       // print updated value
-      lcd.setCursor(66, row);
+      lcd.setCursor(66, 8 * (row + 1));
       SerialUSB.println(TargetValue);
       lcd.print(TargetValue, 0);
       lastChannel = channel;
     }
     // delay(50);
+    lcd.sendBuffer(); // update screen now
   }
   channel = row;      // load back the previous row position to the button counter so that the cursor stays in the same position as it was left before switching to 'value editing mode'
   constrainEnc = 1;   // enable constrainment of button counter's range so to stay within the menu's range
@@ -1292,7 +1309,7 @@ float EditFloatValue() // a function to edit a variable using the UI - function 
   while (enterPressed != 1)
   {                // stays in 'value editing mode' until enter is pressed
     ReadButtons(); // check the buttons for any change
-    lcd.setCursor(0, row);
+    lcd.setCursor(0, 8 * (row + 1));
     lcd.print("*");
     if (channel != lastChannel)
     { // when up or down button is pressed
@@ -1307,16 +1324,18 @@ float EditFloatValue() // a function to edit a variable using the UI - function 
       // clear a section of a row to make space for updated value
       for (int i = 35; i <= 50; i++)
       {
-        lcd.setCursor(i, row);
-        lcd.print("   ");
+        lcd.setDrawColor(0);
+        lcd.drawBox(i, 8 * row, 6 * 3, 8 * (row + 1));
+        lcd.setDrawColor(1);
       }
       // print updated value
-      lcd.setCursor(35, row);
+      lcd.setCursor(35, 8 * (row + 1));
       SerialUSB.println(TargetValue);
       lcd.print(TargetValue, 2);
       lastChannel = channel;
     }
     // delay(50);
+    lcd.sendBuffer(); // update screen now
   }
   channel = row;      // load back the previous row position to the button counter so that the cursor stays in the same position as it was left before switching to 'value editing mode'
   constrainEnc = 1;   // enable constrainment of button counter's range so to stay within the menu's range
@@ -1338,7 +1357,7 @@ void ReadButtons()
 
   if (buttonEnterState == HIGH && prevBtnEnt == LOW)
   {
-    if ((millis() - lastBtnEnt) > transEntInt)
+    if ((millis() - lastBtnEnt) > (unsigned int)transEntInt)
     {
       enterPressed = 1;
     }
@@ -1350,7 +1369,7 @@ void ReadButtons()
 
   if (buttonUpState == HIGH && prevBtnUp == LOW)
   {
-    if ((millis() - lastBtnUp) > transInt)
+    if ((millis() - lastBtnUp) > (unsigned int)transInt)
     {
       channel--;
     }
@@ -1362,7 +1381,7 @@ void ReadButtons()
 
   if (buttonDownState == HIGH && prevBtnDown == LOW)
   {
-    if ((millis() - lastBtnDown) > transInt)
+    if ((millis() - lastBtnDown) > (unsigned int)transInt)
     {
       channel++;
     }
@@ -1435,11 +1454,10 @@ void ResetParameters()
 void ScrollCursor() // makes the cursor move
 {
   lastChannel = channel; // keep track button counter changes
-  for (int i = 0; i <= 6; i++)
-  { // clear the whole column when redrawing a new cursor
-    lcd.setCursor(coll, i);
-    lcd.print(" ");
-  }
-  lcd.setCursor(coll, channel); // set new cursor position
-  lcd.print(">");               // draw cursor
+  lcd.setDrawColor(0);
+  lcd.drawBox(coll, 0, 6, 64); // clear the whole column when redrawing a new cursor
+  lcd.setDrawColor(1);
+  lcd.setCursor(coll, 8 * (channel + 1));
+  lcd.print(">"); // draw cursor
+  lcd.sendBuffer();
 }
