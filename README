@@ -1,0 +1,8 @@
+Systech Illinois ZR800 serial data access
+
+Copyright (c) 2025 Ketut P. Kumajaya.  All right reserved.
+
+Reads the ZR800 oxygen and temperature readings via serial port, then displays
+them on the LCD and also sends them to the analog output. It has basic
+features to change the LCD brightness, the baudrate, the oxygen and
+temperature reading range, and also features to calibrate the analog output.

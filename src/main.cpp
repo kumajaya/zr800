@@ -9,6 +9,18 @@
  * UC1701 compatible LCD; rst:D19 dc:D20 dn:D21 sclk:D22 (set pin configuration in UC1701 library header)
  * 3-button membrane panel; D23, D24, D25
  */
+
+/*
+  Systech Illinois ZR800 serial data access
+
+  Copyright (c) 2025 Ketut P. Kumajaya.  All right reserved.
+
+  Reads the ZR800 oxygen and temperature readings via serial port, then displays
+  them on the LCD and also sends them to the analog output. It has basic
+  features to change the LCD brightness, the baudrate, the oxygen and
+  temperature reading range, and also features to calibrate the analog output.
+*/
+
 #include <Indio.h>
 #include <Wire.h>
 #include <U8g2lib.h>
