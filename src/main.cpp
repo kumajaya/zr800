@@ -246,32 +246,43 @@ void loop()
 
 void SerialRS485Loop()
 {
-  if ((millis() - lastSerialRead) > 1000)
+  if (!calibration && (millis() - lastSerialRead) > 1000)
   {
     oxygen = SerialRS485.request("?\r").toFloat();
     float fx = 0;
-    if (!calibration)
+    float scaling_min = Config.scalings.oxygen_min * pow(10, -6);
+    float scaling_max = Config.scalings.oxygen_max * pow(10, -2);
+    if (oxygen >= scaling_min && oxygen <= scaling_max)
     {
-      fx = remap(oxygen, Config.scalings.oxygen_min * pow(10, -6),
-                 Config.scalings.oxygen_max * pow(10, -2), Config.analogs[4].base_min,
+      fx = remap(oxygen, scaling_min, scaling_max, Config.analogs[4].base_min,
                  Config.analogs[4].base_max);
       Indio.analogWrite(1, fx, false); // write scaled oxygen to analog output
     }
-    oxygen_unit = 1; // dispaly unit in ppm by default
-    oxygen = oxygen * 100.0 * 10000.0;
-    int i = int(log10(oxygen) + 1); // check digit, max 5 for ppm
-    if (i > 5)
+    else
     {
-      oxygen_unit = 0; // display unit in %
-      oxygen = oxygen / 10000.0;
+      Indio.analogWrite(1, Config.analogs[4].base_max, false); // set analog output to maximum
     }
-    delay(100);
-    temperature = SerialRS485.request("TEMP?\r").toFloat();
-    if (!calibration)
+    oxygen_unit = 1;                   // dispaly unit in ppm by default
+    oxygen = oxygen * 100.0 * 10000.0; // oxygen reading in ppm by default
+    if (int(log10(oxygen) + 1) > 5)    // check digit count, max 5 for ppm
     {
-      fx = remap(temperature, Config.scalings.temperature_min, Config.scalings.temperature_max,
-                 Config.analogs[5].base_min, Config.analogs[5].base_max);
+      oxygen_unit = 0;           // display unit in %
+      oxygen = oxygen / 10000.0; // convert back to %, check digit count later
+    }
+
+    delay(150);
+    temperature = SerialRS485.request("TEMP?\r").toFloat();
+    scaling_min = Config.scalings.temperature_min;
+    scaling_max = Config.scalings.temperature_max;
+    if (temperature >= scaling_min && temperature <= scaling_max)
+    {
+      fx = remap(temperature, scaling_min, scaling_max, Config.analogs[5].base_min,
+                 Config.analogs[5].base_max);
       Indio.analogWrite(2, fx, false); // write scaled temperature to analog output
+    }
+    else
+    {
+      Indio.analogWrite(2, Config.analogs[5].base_max, false); // set analog output to maximum
     }
 #if __DEBUG__
     SerialUSB.println(oxygen, 1);
@@ -337,6 +348,8 @@ void MenuMain()
   lcd.setDrawColor(1);
   lcd.drawRFrame(6, 37, 122, 26, 3);    // Draw a rounded frame for the secondary display area
   stringWidth = lcd.getStrWidth("ppm"); // use ppm string as reference
+  lcd.setCursor((128 - stringWidth) - 3, 22);
+  lcd.print(F("ppm"));
   lcd.drawCircle((128 - stringWidth) - 2, 42, 1);
   lcd.setCursor((128 - stringWidth) + 1, 48);
   lcd.print(F("C"));
@@ -357,7 +370,10 @@ void MenuMainLive()
     lcd.setDrawColor(0);
     lcd.drawBox(8, 11, 100, 22);
     lcd.setDrawColor(1);
-    floatToString(oxygen, S, sizeof(S), 1);
+    if (int(log10(oxygen) + 1) > 5) // recheck digit count
+      snprintf(S, sizeof(S), "%s", "00000.0");
+    else
+      floatToString(oxygen, S, sizeof(S), 1);
     stringWidth = lcd.getStrWidth(S);
     lcd.setCursor(100 - stringWidth, 32);
     lcd.print(S);
@@ -380,7 +396,10 @@ void MenuMainLive()
     lcd.setDrawColor(0);
     lcd.drawBox(8, 39, 100, 22);
     lcd.setDrawColor(1);
-    floatToString(temperature, S, sizeof(S), 1);
+    if (int(log10(temperature) + 1) > 5) // check digit count
+      snprintf(S, sizeof(S), "%s", "00000.0");
+    else
+      floatToString(temperature, S, sizeof(S), 1);
     stringWidth = lcd.getStrWidth(S);
     lcd.setCursor(100 - stringWidth, 59);
     lcd.print(S);
@@ -546,12 +565,13 @@ void Navigate()
           Config.settings.backlight = (uint8_t)EditValue();
           analogWrite(backlightPin, (map(Config.settings.backlight, 5, 0, 255, 0)));
         }
-        uint8_t baud = 4;
+        uint8_t baudrate = 4;
         if (channel == 1 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
         {
-          baud = Config.settings.baudrate; // save current value of the variable to be edited
-          TargetValue = baud;              // copy variable to be edited to 'Target value'
+          baudrate = Config.settings.baudrate; // save current value of the variable to be edited
+          TargetValue = baudrate;              // copy variable to be edited to 'Target value'
           Config.settings.baudrate = (byte)EditValue();
+          SerialRS485.begin(BAUDRATE[Config.settings.baudrate]);
         }
         float oxygen_min = -1;
         if (channel == 2 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
@@ -587,11 +607,8 @@ void Navigate()
         {
           if (backlight != Config.settings.backlight)
             Config.SaveSetting();
-          if (baud != Config.settings.baudrate)
-          {
+          if (baudrate != Config.settings.baudrate)
             Config.SaveSetting();
-            SerialRS485.begin(BAUDRATE[Config.settings.baudrate]);
-          }
           if (oxygen_min != Config.scalings.oxygen_min)
             Config.SaveScaling(1, Config.scalings.oxygen_min);
           if (oxygen_max != Config.scalings.oxygen_max)
