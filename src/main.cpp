@@ -82,7 +82,8 @@ const int D17 = 17;
 
 float anOutCh1 = 0;
 float anOutCh2 = 0;
-int anOutUpLimit = 0;
+float anOutUpLimit = 0;
+float anOutDownLimit = 0;
 
 int ButtonsAnalogValue = 0;      // value read from mebrane panel buttons.
 int backlightIntensity = 5;      // LCD backlight intesity
@@ -91,11 +92,6 @@ unsigned long lastLCDredraw = 0; // keeps track of last time the screen was redr
 
 // Function prototype
 void MenuWelcome();
-void MenuDigitalIn1Live();
-void MenuDigitalIn2Live();
-void MenuAnalogIn1Live();
-void MenuAnalogIn20mALiveInd();
-void MenuAnalogIn10VLiveInd();
 void Navigate();
 void ScrollCursor();
 void ReadButtons();
@@ -103,7 +99,41 @@ void SetInput();
 void SetOutput();
 float EditValue();
 float EditFloatValue();
-void ResetParameters();
+
+// ZR800 start
+#include "Config.h"
+#include "SerialRS485.h"
+#include <floatToString.h>
+
+float oxygen = 0;
+float temperature = 0;
+float oxygen_disp = 0;
+float temperature_disp = 0;
+uint8_t oxygen_unit = 0; // 0 = %; 1 = ppm
+unsigned long lastSerialRead = 0;
+uint8_t lastStatColor = 0;
+uint8_t calibration = 0;
+
+#include <Adafruit_SleepyDog.h>
+static const uint16_t wd_period PROGMEM = 8000;
+
+float remap(float valueIn, float baseMin, float baseMax, float limitMin, float limitMax, bool min_clip = true, bool max_clip = true)
+{
+  float v = ((limitMax - limitMin) * (valueIn - baseMin) / (baseMax - baseMin)) + limitMin;
+  if (min_clip)
+  {
+    if (v < limitMin)
+      v = limitMin;
+  }
+  if (max_clip)
+  {
+    if (v > limitMax)
+      v = limitMax;
+  }
+  return v;
+}
+
+void SerialRS485Loop();
 
 void setup()
 {
@@ -117,8 +147,10 @@ void setup()
   pinMode(buttonEnterPin, INPUT);
   pinMode(buttonUpPin, INPUT);
   pinMode(buttonDownPin, INPUT);
+
   pinMode(backlightPin, OUTPUT);                                      // set backlight pin to output
   analogWrite(backlightPin, (map(backlightIntensity, 5, 1, 255, 0))); // convert backlight intesity from a value of 0-5 to a value of 0-255 for PWM.
+
   // LCD init
   lcd.begin();
   lcd.clearBuffer();
@@ -126,14 +158,57 @@ void setup()
   lcd.setFont(u8g2_font_6x12_tr);
   lcd.setDrawColor(0); // set color to blank
   lcd.drawBox(0, 0, 128, 64);
-  lcd.sendBuffer(); // update screen now
+  lcd.sendBuffer();    // update screen now
   lcd.setDrawColor(1); // set color to black
 
   // debug
+#if __DEBUG__
   SerialUSB.begin(9600); // enables port for debugging messages
+#endif
 
   // Menu init
   MenuWelcome(); // load first menu
+
+  // Configuration
+  Config.begin(); // load default values or from EEPROM
+
+  // RS485 init
+  SerialRS485.begin(BAUDRATE[Config.settings.baudrate]);
+
+  // Restore backlight config
+  analogWrite(backlightPin, (map(Config.settings.backlight, 5, 0, 255, 0)));
+
+  lcd.setCursor(5, (8 * 8) - 2);
+  if (REG_PM_RCAUSE == PM_RCAUSE_SYST)
+  {
+    lcd.print(F("Reboot by system"));
+  }
+  if (REG_PM_RCAUSE == PM_RCAUSE_WDT)
+  {
+    lcd.print(F("Reboot by watchdog"));
+  }
+  if (REG_PM_RCAUSE == PM_RCAUSE_EXT)
+  {
+    lcd.print(F("Reboot by ext. reset"));
+  }
+#if 0
+  if (REG_PM_RCAUSE == PM_RCAUSE_BOD33){
+    SerialMon.println("Reset brown out 3.3V");
+  }
+  if (REG_PM_RCAUSE == PM_RCAUSE_BOD12){
+    SerialMon.println("Reset brown out 1.2v");
+  }
+#endif
+  if (REG_PM_RCAUSE == PM_RCAUSE_POR)
+  {
+    lcd.print(F("Reboot by power"));
+  }
+
+  lcd.sendBuffer(); // update screen now
+
+  // enable 8s watchdog, 16s max. Reset it in every task
+  Watchdog.enable(wd_period);
+  delay(1000);
 }
 
 /*
@@ -149,10 +224,50 @@ void setup()
 
 void loop()
 {
-
+  // Make sure to reset watchdog every loop iteration!
+  Watchdog.reset();
   ReadButtons(); // check buttons
   Navigate();    // update menus and perform actions
   //  delay(50);
+  SerialRS485Loop();
+}
+
+void SerialRS485Loop()
+{
+  if ((millis() - lastSerialRead) > 1000)
+  {
+    oxygen = SerialRS485.request("?\r").toFloat();
+    float fx = 0;
+    if (!calibration)
+    {
+      fx = remap(oxygen, Config.scalings.oxygen_min * pow(10, -6),
+                 Config.scalings.oxygen_max * pow(10, -2), Config.analogs[4].base_min,
+                 Config.analogs[4].base_max);
+      Indio.analogWrite(1, fx, false); // write scaled oxygen to analog output
+    }
+    oxygen_unit = 1; // dispaly unit in ppm by default
+    oxygen = oxygen * 100.0 * 10000.0;
+    int i = int(log10(oxygen) + 1); // check digit, max 5 for ppm
+    if (i > 5)
+    {
+      oxygen_unit = 0; // display unit in %
+      oxygen = oxygen / 10000.0;
+    }
+    delay(100);
+    temperature = SerialRS485.request("TEMP?\r").toFloat();
+    if (!calibration)
+    {
+      fx = remap(temperature, Config.scalings.temperature_min, Config.scalings.temperature_max,
+                 Config.analogs[5].base_min, Config.analogs[5].base_max);
+      Indio.analogWrite(2, fx, false); // write scaled temperature to analog output
+    }
+#if __DEBUG__
+    SerialUSB.println(oxygen, 1);
+    SerialUSB.println(temperature, 1);
+#endif
+    lastStatColor = !lastStatColor;
+    lastSerialRead = millis();
+  }
 }
 
 //-----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -162,687 +277,214 @@ void loop()
 
 void MenuWelcome()
 { // this function draws the first menu - splash screen
-  // menu inintialisers
+  // menu initializers
   channel = 0;         // starting row position of the cursor (top row) - controlled by the button panel counter
   channelUpLimit = 0;  // upper row limit
   channelLowLimit = 0; // lower row limit
   MenuLevel = 0;       // menu tree depth -> first level
   MenuID = 0;          // unique menu id -> has to be unique for each menu on the same menu level.
-  enterPressed = 0;    // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
-  lcd.clearBuffer();   // clear the screen
+  enterPressed = 0;    // clears any possible accidental "Enter" presses that could have been carried over from the previous menu
+  lcd.clearBuffer();
   // actual user content on the screen
-  lcd.setCursor(5, 8 * (1 + 1)); // set the cursor to the fifth pixel from the left edge, third row.
-  lcd.print("Welcome to");       // print text on screen
-  lcd.setCursor(5, 8 * (2 + 1)); // set the cursor to the fifth pixel from the left edge, third row.
-  lcd.print("Industruino!");     // print text on screen
-  lcd.sendBuffer();              // update screen now
+  lcd.setDrawColor(1);
+  lcd.setCursor(6, 8 * 1);                         // set the cursor to the sixth pixel from the left edge, first row.
+  lcd.print(F("Welcome to"));                      // print text on screen
+  lcd.setCursor(6, 8 * 2);                         // set the cursor to the sixth pixel from the left edge, second row.
+  lcd.print(F(ZR800_NAME " v" ZR800_VERSION "!")); // print text on screen
+  lcd.setCursor(6, 8 * 4);
+  lcd.print(F("a Kiiota product"));
+  lcd.setCursor(6, 8 * 6);
+  lcd.print(F(ZR800_YEAR ", Automation DEV"));
+  lcd.sendBuffer(); // update screen now
   delay(2000);
 }
 
-void MenuSelect()
-{ // second menu - choice of submenu's
-  // menu inintialisers
-  channel = 3; // starting row position of the cursor (top row) - controlled by the button panel counter
-  channelLowLimit = 3;
-  channelUpLimit = 4; // upper row limit
-  MenuLevel = 1;      // menu tree depth -> second level
-  MenuID = 1;         // unique menu id -> has to be unique for each menu on the same menu level.
-  enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
-  lcd.clearBuffer();  // clear the screen
-  ScrollCursor();     // enable the moving cursor (note that this function is not called in the splash screen, thus disabling the cursor)
-  // actual user content on the screen
-  lcd.setCursor(6, 8 * (0 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Please select");    // print text on screen
-  lcd.setCursor(6, 8 * (1 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Baseboard type:");  // print text on screen
-  lcd.setCursor(6, 8 * (3 + 1)); // set the cursor to the sixth pixel from the left edge, second row.
-  lcd.print("IND.I/O");          // print text on screen
-  lcd.setCursor(6, 8 * (4 + 1)); // set the cursor to the sixth pixel from the left edge, third row.
-  lcd.print("PROTO");            // print text on screen
-  lcd.sendBuffer();              // update screen now
-}
+void MenuMainLive();
 
 void MenuMain()
 { // second menu - choice of submenu's
   // menu inintialisers
-  channel = 1;        // starting row position of the cursor (top row) - controlled by the button panel counter
-  channelUpLimit = 2; // upper row limit
+  channel = 8; // starting row position of the cursor (top row) - controlled by the button panel counter
+  channelLowLimit = 8;
+  channelUpLimit = 8; // upper row limit
   MenuLevel = 1;      // menu tree depth -> second level
   MenuID = 1;         // unique menu id -> has to be unique for each menu on the same menu level.
-  enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over from the previous menu
+  enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been carried over from the previous menu
   lcd.clearBuffer();  // clear the screen
-  ScrollCursor();     // enable the moving cursor (note that this function is not called in the splash screen, thus disabling the cursor)
   // actual user content on the screen
-  lcd.setCursor(6, 8 * (0 + 1)); // set the cursor to the sixth pixel from the left edge, first row.
-  lcd.print("Setup");            // print text on screen
-  lcd.setCursor(6, 8 * (1 + 1)); // set the cursor to the sixth pixel from the left edge, second row.
-  lcd.print("Demo");             // print text on screen
-  lcd.setCursor(6, 8 * (2 + 1)); // set the cursor to the sixth pixel from the left edge, third row.
-  lcd.print("Back");             // print text on screen
-  lcd.sendBuffer();              // update screen now
+  lcd.setDrawColor(1);
+  lcd.drawRBox(6, 0, 122, 14, 2); // Draw a rounded box for the title background
+  int stringWidth = lcd.getStrWidth(ZR800_NAME " DISPLAY");
+  lcd.setCursor(9 + (122 - stringWidth) / 2, 9);
+  lcd.setDrawColor(0);
+  lcd.print(F(ZR800_NAME " DISPLAY"));
+  lcd.setDrawColor(1);
+  lcd.drawRFrame(6, 9, 122, 26, 3); // Draw a rounded frame for the main display area
+  lcd.setDrawColor(0);
+  lcd.drawBox(7, 11, 120, 3); // Draw a white box to hide rounded part
+  lcd.setDrawColor(1);
+  lcd.drawRFrame(6, 37, 122, 26, 3);    // Draw a rounded frame for the secondary display area
+  stringWidth = lcd.getStrWidth("ppm"); // use ppm string as reference
+  lcd.drawCircle((128 - stringWidth) - 2, 42, 1);
+  lcd.setCursor((128 - stringWidth) + 1, 48);
+  lcd.print(F("C"));
+}
+
+void MenuMainLive()
+{
+  int stringWidth = 0;
+  char S[10];
+
+  // update serial activity status
+  lcd.setDrawColor(lastStatColor);
+  lcd.drawDisc(12, 5, 2);
+
+  lcd.setFont(u8g2_font_ncenB18_tn); // 18 pixel height
+  if (oxygen_disp != oxygen)
+  {
+    lcd.setDrawColor(0);
+    lcd.drawBox(8, 11, 100, 22);
+    lcd.setDrawColor(1);
+    floatToString(oxygen, S, sizeof(S), 1);
+    stringWidth = lcd.getStrWidth(S);
+    lcd.setCursor(100 - stringWidth, 32);
+    lcd.print(S);
+    lcd.setFont(u8g2_font_6x12_tr);
+    stringWidth = lcd.getStrWidth("ppm");
+    lcd.setDrawColor(0);
+    lcd.drawBox((128 - stringWidth) - 3, 22 - 8, stringWidth, 10);
+    lcd.setDrawColor(1);
+    lcd.setCursor((128 - stringWidth) - 3, 22);
+    if (oxygen_unit == 0)
+      lcd.print(F("%"));
+    else
+      lcd.print(F("ppm"));
+    oxygen_disp = oxygen;
+  }
+
+  lcd.setFont(u8g2_font_ncenB18_tn); // 18 pixel height
+  if (temperature_disp != temperature)
+  {
+    lcd.setDrawColor(0);
+    lcd.drawBox(8, 39, 100, 22);
+    lcd.setDrawColor(1);
+    floatToString(temperature, S, sizeof(S), 1);
+    stringWidth = lcd.getStrWidth(S);
+    lcd.setCursor(100 - stringWidth, 59);
+    lcd.print(S);
+    temperature_disp = temperature;
+  }
+
+  lcd.setFont(u8g2_font_6x12_tr); // restore default font
+  lcd.sendBuffer();               // update screen now
 }
 
 void MenuSetup()
 { // submenu of Main menu - setup screen for Industruino
-  channel = 0;
-  channelUpLimit = 2;
-  channelLowLimit = 0;
-  MenuID = 9;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("BackLight     ");
-  lcd.setCursor(65, 8 * (0 + 1));
-  lcd.print(backlightIntensity, 1);
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("Reset param.");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("Back");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuParametersReset()
-{
   channel = 6;
-  channelUpLimit = 5;
-  channelLowLimit = 4;
-  MenuID = 10;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("Set system");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("to default");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("settings?");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("OK?");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("Cancel");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDemoProto()
-{
-  channel = 0;
-  channelUpLimit = 3;
-  channelLowLimit = 0;
-  MenuID = 3;
-  MenuLevel = 2;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("DigitalOut");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("DigitalIn");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("AnalogIn");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("Back");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalOut1()
-{
-  SetOutput();
-  channel = 0;
-  channelUpLimit = 6;
-  channelLowLimit = 0;
-  MenuID = 1;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D0");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D1");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D2");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D3");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D4");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D5");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalOut1Indio()
-{
-  SetOutput();
-  channel = 0;
-  channelUpLimit = 6;
-  channelLowLimit = 0;
-  MenuID = 1;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D0");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D1");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D2");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D3");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D4");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D5");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalOut2()
-{
-  channel = 0;
-  channelUpLimit = 6;
-  channelLowLimit = -1;
-  MenuID = 2;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D6");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D7");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D8");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D9");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D10");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D11");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalOut3()
-{
-  channel = 0;
-  channelUpLimit = 5;
-  channelLowLimit = -1;
-  MenuID = 3;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D12");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D14");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D15");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D16");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D17");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("Back");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalIn1()
-{
-  SetInput();
-  channel = 0;
-  channelUpLimit = 1;
-  channelLowLimit = 0;
-  MenuID = 4;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  MenuDigitalIn1Live();
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalIn1Live()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D0  ");
-  lcd.print(digitalRead(0));
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D1  ");
-  lcd.print(digitalRead(1));
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D2  ");
-  lcd.print(digitalRead(2));
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D3  ");
-  lcd.print(digitalRead(3));
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D4  ");
-  lcd.print(digitalRead(4));
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D5  ");
-  lcd.print(digitalRead(5));
-}
-
-void MenuDigitalIn2()
-{
-  channel = 0;
-  channelUpLimit = 1;
-  channelLowLimit = -1;
-  MenuID = 5;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  MenuDigitalIn2Live();
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalIn2Live()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D6  ");
-  lcd.print(digitalRead(6));
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D7  ");
-  lcd.print(digitalRead(7));
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D8  ");
-  lcd.print(digitalRead(8));
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D9  ");
-  lcd.print(digitalRead(9));
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D10 ");
-  lcd.print(digitalRead(10));
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D11 ");
-  lcd.print(digitalRead(11));
-}
-
-void MenuDigitalIn3()
-{
-  lcd.clearBuffer();
-  channel = 5;
-  channelUpLimit = 5;
-  channelLowLimit = 4;
-  MenuID = 6;
-  MenuLevel = 3;
-  enterPressed = 0;
-  ScrollCursor();
-  MenuDigitalIn2Live();
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalIn3Live()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D12 ");
-  lcd.print(digitalRead(12));
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D14 ");
-  lcd.print(digitalRead(14));
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D15 ");
-  lcd.print(digitalRead(15));
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D16 ");
-  lcd.print(digitalRead(16));
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D17 ");
-  lcd.print(digitalRead(17));
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("Back   ");
-}
-
-void AnalogOut1()
-{
-  channel = 0;
-  channelUpLimit = 6;
-  channelLowLimit = 0;
-  MenuID = 8;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("D0");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("D1");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("D3");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("D5");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("D6");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("D7");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuAnalogIn1()
-{
-  SetInput();
-  channel = 5;
-  channelUpLimit = 5;
-  channelLowLimit = 5;
-  MenuID = 7;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  MenuAnalogIn1Live();
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuAnalogIn1Live()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("A0           ");
-  lcd.setCursor(30, 8 * (0 + 1));
-  lcd.print(analogRead(0));
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("A10           ");
-  lcd.setCursor(30, 8 * (1 + 1));
-  lcd.print(analogRead(10));
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("A11           ");
-  lcd.setCursor(30, 8 * (2 + 1));
-  lcd.print(analogRead(11));
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("A12           ");
-  lcd.setCursor(30, 8 * (3 + 1));
-  lcd.print(analogRead(12));
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("A13           ");
-  lcd.setCursor(30, 8 * (4 + 1));
-  lcd.print(analogRead(13));
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("Back   ");
-}
-
-//---------------------------------------------------------------------------------------------------------------------------------------------
-//---------------------------------------------------------------------------------------------------------------------------------------------
-
-void MenuDemoInd()
-{
-  channel = 0;
   channelUpLimit = 7;
   channelLowLimit = 0;
-  MenuID = 11;
+  MenuID = 1;
   MenuLevel = 2;
   enterPressed = 0;
   lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("Digital Input");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("Digital Output");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("Analog Input  0-10V");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("Analog Input  0-20mA");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("Analog Output 0-10V");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("Analog Output 0-20mA");
-  lcd.setCursor(6, 8 * (6 + 1));
-  lcd.print("LCD backlight");
-  lcd.setCursor(6, 8 * (7 + 1));
-  lcd.print("Back");
+  lcd.setDrawColor(1);
+  int i = 0;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Backlight"));
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(Config.settings.backlight);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Baudrate"));
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(BAUDRATE[Config.settings.baudrate]);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Oxygen zero"));
+  int stringWidth;
+  char S[10];
+  floatToString(Config.scalings.oxygen_min, S, sizeof(S), 1);
+  stringWidth = lcd.getStrWidth(S);
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(S);
+  lcd.setCursor(79 + stringWidth + 1, 8 * (i + 1));
+  lcd.print(F("E-06"));
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Oxygen span"));
+  floatToString(Config.scalings.oxygen_max, S, sizeof(S), 1);
+  stringWidth = lcd.getStrWidth(S);
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(S);
+  lcd.setCursor(79 + stringWidth + 1, 8 * (i + 1));
+  lcd.print(F("E-02"));
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Temp. zero"));
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(Config.scalings.temperature_min, 0);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Temp. span"));
+  lcd.setCursor(79, 8 * (i + 1));
+  lcd.print(Config.scalings.temperature_max, 0);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  i++;
+  lcd.print(F("Back"));
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Next"));
   lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalOutInd()
-{
-
-  for (int i = 1; i <= 8; i++)
-  {
-    Indio.digitalMode(i, OUTPUT);
-    Indio.digitalWrite(i, LOW);
-  }
-  channel = 0;
-  channelUpLimit = 8;
-  channelLowLimit = 0;
-  MenuID = 12;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
   ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("CH3");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("CH4");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("CH5");
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("CH6");
-  lcd.setCursor(6, 8 * (6 + 1));
-  lcd.print("CH7");
-  lcd.setCursor(6, 8 * (7 + 1));
-  lcd.print("CH8");
-  lcd.sendBuffer(); // update screen now
+  // reset measurement for force update later
+  oxygen_disp = 0;
+  temperature_disp = 0;
 }
 
-void MenuDigitalInInd()
+void MenuCalibrateOutput()
 {
-
-  for (int i = 1; i <= 8; i++)
-  {
-    Indio.digitalMode(i, INPUT);
-    Indio.digitalWrite(i, LOW);
-  }
-
-  channel = 0;
-  channelUpLimit = 1;
-  channelLowLimit = 0;
-  MenuID = 14;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  MenuDigitalIn1Live();
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuDigitalInLiveInd()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1  ");
-  lcd.print(Indio.digitalRead(1));
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2  ");
-  lcd.print(Indio.digitalRead(2));
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("CH3  ");
-  lcd.print(Indio.digitalRead(3));
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("CH4  ");
-  lcd.print(Indio.digitalRead(4));
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("CH5  ");
-  lcd.print(Indio.digitalRead(5));
-  lcd.setCursor(6, 8 * (5 + 1));
-  lcd.print("CH6  ");
-  lcd.print(Indio.digitalRead(6));
-  lcd.setCursor(6, 8 * (6 + 1));
-  lcd.print("CH7  ");
-  lcd.print(Indio.digitalRead(7));
-  lcd.setCursor(6, 8 * (7 + 1));
-  lcd.print("CH8  ");
-  lcd.print(Indio.digitalRead(8));
-}
-
-void MenuAnalogOut20mAInd()
-{
-  anOutUpLimit = 20.5;
-  anOutCh1 = 0;
-  anOutCh2 = 0;
-  Indio.analogWriteMode(1, mA);
-  Indio.analogWriteMode(2, mA);
-  Indio.analogWrite(1, anOutCh1, false);
-  Indio.analogWrite(2, anOutCh2, false);
-  channel = 0;
-  channelUpLimit = 2;
-  channelLowLimit = 0;
-  MenuID = 16;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1");
-  lcd.setCursor(35, 8 * (0 + 1));
-  lcd.print(anOutCh1);
-  lcd.setCursor(70, 8 * (0 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2");
-  lcd.setCursor(35, 8 * (1 + 1));
-  lcd.print(anOutCh2);
-  lcd.setCursor(70, 8 * (1 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("Back");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuAnalogOut10VInd()
-{
-  anOutUpLimit = 10.5;
-  anOutCh1 = 0;
-  anOutCh2 = 0;
-  Indio.analogWriteMode(1, V10);
-  Indio.analogWriteMode(2, V10);
-  Indio.analogWrite(1, anOutCh1, false);
-  Indio.analogWrite(2, anOutCh2, false);
-  channel = 0;
-  channelUpLimit = 2;
-  channelLowLimit = 0;
-  MenuID = 17;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1");
-  lcd.setCursor(35, 8 * (0 + 1));
-  lcd.print(anOutCh1, 2);
-  lcd.setCursor(70, 8 * (0 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2");
-  lcd.setCursor(35, 8 * (1 + 1));
-  lcd.print(anOutCh2, 1);
-  lcd.setCursor(70, 8 * (1 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("Back");
-  lcd.sendBuffer(); // update screen now
-}
-
-void MenuAnalogIn20mAInd()
-{
-  Indio.setADCResolution(14);
-  Indio.analogReadMode(1, mA);
-  Indio.analogReadMode(2, mA);
-  Indio.analogReadMode(3, mA);
-  Indio.analogReadMode(4, mA);
   channel = 4;
-  channelUpLimit = 4;
-  channelLowLimit = 4;
-  MenuID = 18;
+  channelUpLimit = 5;
+  channelLowLimit = 0;
   MenuLevel = 3;
+  MenuID = 1;
   enterPressed = 0;
   lcd.clearBuffer();
+  lcd.setDrawColor(1);
   ScrollCursor();
-  MenuAnalogIn20mALiveInd();
+  int i = 0;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Out. 1 zero"));
+  lcd.setCursor(98, 8 * (i + 1));
+  lcd.print(Config.analogs[4].base_min, 3);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Out. 1 span"));
+  lcd.setCursor(92, 8 * (i + 1));
+  lcd.print(Config.analogs[4].base_max, 3);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Out. 2 zero"));
+  lcd.setCursor(98, 8 * (i + 1));
+  lcd.print(Config.analogs[5].base_min, 3);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Out. 2 span"));
+  lcd.setCursor(92, 8 * (i + 1));
+  lcd.print(Config.analogs[5].base_max, 3);
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Back"));
   lcd.sendBuffer(); // update screen now
-}
-
-void MenuAnalogIn20mALiveInd()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1           ");
-  lcd.setCursor(35, 8 * (0 + 1));
-  lcd.print(Indio.analogRead(1));
-  lcd.setCursor(67, 8 * (0 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2           ");
-  lcd.setCursor(35, 8 * (1 + 1));
-  lcd.print(Indio.analogRead(2));
-  lcd.setCursor(67, 8 * (1 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("CH3           ");
-  lcd.setCursor(35, 8 * (2 + 1));
-  lcd.print(Indio.analogRead(3));
-  lcd.setCursor(67, 8 * (2 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("CH4           ");
-  lcd.setCursor(35, 8 * (3 + 1));
-  lcd.print(Indio.analogRead(4));
-  lcd.setCursor(67, 8 * (3 + 1));
-  lcd.print("mA");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("Back   ");
-}
-
-void MenuAnalogIn10VInd()
-{
-  Indio.setADCResolution(14);
-  Indio.analogReadMode(1, V10);
-  Indio.analogReadMode(2, V10);
-  Indio.analogReadMode(3, V10);
-  Indio.analogReadMode(4, V10);
-  channel = 4;
-  channelUpLimit = 4;
-  channelLowLimit = 4;
-  MenuID = 19;
-  MenuLevel = 3;
-  enterPressed = 0;
-  lcd.clearBuffer();
-  ScrollCursor();
-  MenuAnalogIn10VLiveInd();
+  i++;
+  lcd.setCursor(6, 8 * (i + 1));
+  lcd.print(F("Reset"));
   lcd.sendBuffer(); // update screen now
-}
 
-void MenuAnalogIn10VLiveInd()
-{
-  lcd.setCursor(6, 8 * (0 + 1));
-  lcd.print("CH1           ");
-  lcd.setCursor(35, 8 * (0 + 1));
-  lcd.print(Indio.analogRead(1));
-  lcd.setCursor(67, 8 * (0 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (1 + 1));
-  lcd.print("CH2           ");
-  lcd.setCursor(35, 8 * (1 + 1));
-  lcd.print(Indio.analogRead(2));
-  lcd.setCursor(67, 8 * (1 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (2 + 1));
-  lcd.print("CH3           ");
-  lcd.setCursor(35, 8 * (2 + 1));
-  lcd.print(Indio.analogRead(3));
-  lcd.setCursor(67, 8 * (2 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (3 + 1));
-  lcd.print("CH4           ");
-  lcd.setCursor(35, 8 * (3 + 1));
-  lcd.print(Indio.analogRead(4));
-  lcd.setCursor(67, 8 * (3 + 1));
-  lcd.print("V");
-  lcd.setCursor(6, 8 * (4 + 1));
-  lcd.print("Back   ");
+  calibration = 1;
+  Indio.analogWrite(1, Config.analogs[4].base_min, false);
+  Indio.analogWrite(2, Config.analogs[5].base_min, false);
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -859,54 +501,95 @@ void Navigate()
     {
       {
         if (enterPressed == 1)
-          MenuSelect(); // if enter is pressed load the 'Main menu'
+          MenuMain(); // if enter is pressed load the 'Main menu'
       }
     }
 
     if (MenuLevel == 1)
     { // check if current activated menu is the 'Main menu' (first level)
-
-      if (channel == 3 && enterPressed == 1)
-        MenuDemoInd(); // if cursor is on the first row and enter is pressed load the 'Setup' menu
-      if (channel == 4 && enterPressed == 1)
-        MenuDemoProto(); // if cursor is on the second row and enter is pressed load the 'Demo' menu
-      if (channel == 2 && enterPressed == 1)
-        MenuWelcome(); // if cursor is on the third row and enter is pressed load the 'splash screen'
+      if ((millis() - lastLCDredraw) > 300)
+      {
+        MenuMainLive();
+        lastLCDredraw = millis();
+      }
+      if (channel == 8 && enterPressed == 1)
+      {
+        MenuSetup();
+      }
+      else
+      {
+        MenuMainLive();
+      }
     }
 
     if (MenuLevel == 2)
     {
-
-      if (MenuID == 3)
+      if (MenuID == 1)
       {
-        if (channel == 0 && enterPressed == 1)
-          MenuDigitalOut1();
-        if (channel == 1 && enterPressed == 1)
-          MenuDigitalIn1();
-        if (channel == 2 && enterPressed == 1)
-          MenuAnalogIn1();
-        if (channel == 3 && enterPressed == 1)
-          MenuSelect();
-      }
-
-      if (MenuID == 11)
-      {
-        if (channel == 0 && enterPressed == 1)
-          MenuDigitalInInd();
-        if (channel == 1 && enterPressed == 1)
-          MenuDigitalOutInd();
-        if (channel == 2 && enterPressed == 1)
-          MenuAnalogIn10VInd();
-        if (channel == 3 && enterPressed == 1)
-          MenuAnalogIn20mAInd();
-        if (channel == 4 && enterPressed == 1)
-          MenuAnalogOut10VInd();
-        if (channel == 5 && enterPressed == 1)
-          MenuAnalogOut20mAInd();
-        if (channel == 6 && enterPressed == 1)
-          MenuSetup(); // if cursor is on the first row and enter is pressed load the 'Setup' menu
+        uint8_t backlight = 6;
+        if (channel == 0 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          backlight = Config.settings.backlight; // save current value of the variable to be edited
+          TargetValue = backlight;               // copy variable to be edited to 'Target value'
+          Config.settings.backlight = (uint8_t)EditValue();
+          analogWrite(backlightPin, (map(Config.settings.backlight, 5, 0, 255, 0)));
+        }
+        uint8_t baud = 4;
+        if (channel == 1 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          baud = Config.settings.baudrate; // save current value of the variable to be edited
+          TargetValue = baud;              // copy variable to be edited to 'Target value'
+          Config.settings.baudrate = (byte)EditValue();
+        }
+        float oxygen_min = -1;
+        if (channel == 2 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          oxygen_min = Config.scalings.oxygen_min; // save current value of the variable to be edited
+          TargetValue = oxygen_min;                // copy variable to be edited to 'Target value'
+          Config.scalings.oxygen_min = EditFloatValue();
+        }
+        float oxygen_max = -1;
+        if (channel == 3 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          oxygen_max = Config.scalings.oxygen_max; // save current value of the variable to be edited
+          TargetValue = oxygen_max;                // copy variable to be edited to 'Target value'
+          Config.scalings.oxygen_max = EditFloatValue();
+        }
+        float temperature_min = -1;
+        if (channel == 4 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          temperature_min = Config.scalings.temperature_min; // save current value of the variable to be edited
+          TargetValue = temperature_min;                     // copy variable to be edited to 'Target value'
+          Config.scalings.temperature_min = (float)EditValue();
+        }
+        float temperature_max = -1;
+        if (channel == 5 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
+        {
+          temperature_max = Config.scalings.temperature_max; // save current value of the variable to be edited
+          TargetValue = temperature_max;                     // copy variable to be edited to 'Target value'
+          Config.scalings.temperature_max = (float)EditValue();
+        }
         if (channel == 7 && enterPressed == 1)
-          MenuSelect();
+          MenuCalibrateOutput();
+        if (channel == 6 && enterPressed == 1)
+        {
+          if (backlight != Config.settings.backlight)
+            Config.SaveSetting();
+          if (baud != Config.settings.baudrate)
+          {
+            Config.SaveSetting();
+            SerialRS485.begin(BAUDRATE[Config.settings.baudrate]);
+          }
+          if (oxygen_min != Config.scalings.oxygen_min)
+            Config.SaveScaling(1, Config.scalings.oxygen_min);
+          if (oxygen_max != Config.scalings.oxygen_max)
+            Config.SaveScaling(2, Config.scalings.oxygen_max);
+          if (temperature_min != Config.scalings.temperature_min)
+            Config.SaveScaling(3, Config.scalings.temperature_min);
+          if (temperature_max != Config.scalings.temperature_max)
+            Config.SaveScaling(4, Config.scalings.temperature_max);
+          MenuMain();
+        }
       }
     }
 
@@ -914,328 +597,55 @@ void Navigate()
     {
       if (MenuID == 1)
       {
-
-        if (buttonEnterState == LOW)
+        int i = 0;
+        float fx;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print("*");
+          TargetValue = Config.analogs[4].base_min;
+          fx = remap(4.0, 4.0, 20.0, TargetValue, Config.analogs[4].base_max);
+          Indio.analogWrite(1, fx, false);
+          Config.analogs[4].base_min = EditFloatValue();
         }
-
-        if (buttonEnterState == HIGH)
+        i++;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print(">");
+          TargetValue = Config.analogs[4].base_max;
+          fx = remap(20.0, 4.0, 20.0, Config.analogs[4].base_min, TargetValue);
+          Indio.analogWrite(1, fx, false);
+          Config.analogs[4].base_max = EditFloatValue();
         }
-
-        if (channel == 0 && buttonEnterState == HIGH)
-          digitalWrite(D0, HIGH);
-        if (channel == 0 && buttonEnterState == LOW)
-          digitalWrite(D0, LOW);
-        if (channel == 1 && buttonEnterState == HIGH)
-          digitalWrite(D1, HIGH);
-        if (channel == 1 && buttonEnterState == LOW)
-          digitalWrite(D1, LOW);
-        if (channel == 2 && buttonEnterState == HIGH)
-          digitalWrite(D2, HIGH);
-        if (channel == 2 && buttonEnterState == LOW)
-          digitalWrite(D2, LOW);
-        if (channel == 3 && buttonEnterState == HIGH)
-          digitalWrite(D3, HIGH);
-        if (channel == 3 && buttonEnterState == LOW)
-          digitalWrite(D3, LOW);
-        if (channel == 4 && buttonEnterState == HIGH)
-          digitalWrite(D4, HIGH);
-        if (channel == 4 && buttonEnterState == LOW)
-          digitalWrite(D4, LOW);
-        if (channel == 5 && buttonEnterState == HIGH)
-          digitalWrite(D5, HIGH);
-        if (channel == 5 && buttonEnterState == LOW)
-          digitalWrite(D5, LOW);
-        if (channel == 6)
-          MenuDigitalOut2();
-      }
-
-      if (MenuID == 12)
-      {
-
-        if (buttonEnterState == LOW)
+        i++;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print("*");
+          TargetValue = Config.analogs[5].base_min;
+          fx = remap(4.0, 4.0, 20.0, TargetValue, Config.analogs[4].base_max);
+          Indio.analogWrite(2, fx, false);
+          Config.analogs[5].base_min = EditFloatValue();
         }
-
-        if (buttonEnterState == HIGH)
+        i++;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print(">");
+          TargetValue = Config.analogs[5].base_max;
+          fx = remap(20.0, 4.0, 20.0, Config.analogs[4].base_min, TargetValue);
+          Indio.analogWrite(2, fx, false);
+          Config.analogs[5].base_max = EditFloatValue();
         }
-
-        if (channel == 0 && buttonEnterState == LOW)
-          Indio.digitalWrite(1, HIGH);
-        if (channel == 0 && buttonEnterState == HIGH)
-          Indio.digitalWrite(1, LOW);
-        if (channel == 1 && buttonEnterState == LOW)
-          Indio.digitalWrite(2, HIGH);
-        if (channel == 1 && buttonEnterState == HIGH)
-          Indio.digitalWrite(2, LOW);
-        if (channel == 2 && buttonEnterState == LOW)
-          Indio.digitalWrite(3, HIGH);
-        if (channel == 2 && buttonEnterState == HIGH)
-          Indio.digitalWrite(3, LOW);
-        if (channel == 3 && buttonEnterState == LOW)
-          Indio.digitalWrite(4, HIGH);
-        if (channel == 3 && buttonEnterState == HIGH)
-          Indio.digitalWrite(4, LOW);
-        if (channel == 4 && buttonEnterState == LOW)
-          Indio.digitalWrite(5, HIGH);
-        if (channel == 4 && buttonEnterState == HIGH)
-          Indio.digitalWrite(5, LOW);
-        if (channel == 5 && buttonEnterState == LOW)
-          Indio.digitalWrite(6, HIGH);
-        if (channel == 5 && buttonEnterState == HIGH)
-          Indio.digitalWrite(6, LOW);
-        if (channel == 6 && buttonEnterState == LOW)
-          Indio.digitalWrite(7, HIGH);
-        if (channel == 6 && buttonEnterState == HIGH)
-          Indio.digitalWrite(7, LOW);
-        if (channel == 7 && buttonEnterState == LOW)
-          Indio.digitalWrite(8, HIGH);
-        if (channel == 7 && buttonEnterState == HIGH)
-          Indio.digitalWrite(8, LOW);
-        if (channel == 8)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 2)
-      {
-
-        if (buttonEnterState == LOW)
+        i++;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print("*");
+          Config.SaveAnalog(4);
+          delay(100);
+          Config.SaveAnalog(5);
+          delay(100);
+          calibration = 0;
+          MenuSetup();
         }
-
-        if (buttonEnterState == HIGH)
+        i++;
+        if (channel == i && enterPressed == 1)
         {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print(">");
-        }
-
-        if (channel == 0 && buttonEnterState == HIGH)
-          digitalWrite(D6, HIGH);
-        if (channel == 0 && buttonEnterState == LOW)
-          digitalWrite(D6, LOW);
-        if (channel == 1 && buttonEnterState == HIGH)
-          digitalWrite(D7, HIGH);
-        if (channel == 1 && buttonEnterState == LOW)
-          digitalWrite(D7, LOW);
-        if (channel == 2 && buttonEnterState == HIGH)
-          digitalWrite(D8, HIGH);
-        if (channel == 2 && buttonEnterState == LOW)
-          digitalWrite(D8, LOW);
-        if (channel == 3 && buttonEnterState == HIGH)
-          digitalWrite(D9, HIGH);
-        if (channel == 3 && buttonEnterState == LOW)
-          digitalWrite(D9, LOW);
-        if (channel == 4 && buttonEnterState == HIGH)
-          digitalWrite(D10, HIGH);
-        if (channel == 4 && buttonEnterState == LOW)
-          digitalWrite(D10, LOW);
-        if (channel == 5 && buttonEnterState == HIGH)
-          digitalWrite(D11, HIGH);
-        if (channel == 5 && buttonEnterState == LOW)
-          digitalWrite(D11, LOW);
-        if (channel == 6)
-          MenuDigitalOut3();
-        if (channel == -1)
-          MenuDigitalOut1();
-      }
-      if (MenuID == 3)
-      {
-
-        if (buttonEnterState == LOW)
-        {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print("*");
-        }
-
-        if (buttonEnterState == HIGH)
-        {
-          lcd.setCursor(0, 8 * (channel + 1));
-          lcd.print(">");
-        }
-
-        if (channel == 0 && buttonEnterState == HIGH)
-          digitalWrite(D12, HIGH);
-        if (channel == 0 && buttonEnterState == LOW)
-          digitalWrite(D12, LOW);
-        if (channel == 1 && buttonEnterState == HIGH)
-          digitalWrite(D14, HIGH);
-        if (channel == 1 && buttonEnterState == LOW)
-          digitalWrite(D14, LOW);
-        if (channel == 2 && buttonEnterState == HIGH)
-          digitalWrite(D15, HIGH);
-        if (channel == 2 && buttonEnterState == LOW)
-          digitalWrite(D15, LOW);
-        if (channel == 3 && buttonEnterState == HIGH)
-          digitalWrite(D16, HIGH);
-        if (channel == 3 && buttonEnterState == LOW)
-          digitalWrite(D16, LOW);
-        if (channel == 4 && buttonEnterState == HIGH)
-          digitalWrite(D17, HIGH);
-        if (channel == 4 && buttonEnterState == LOW)
-          digitalWrite(D17, LOW);
-        if (channel == 5 && enterPressed == 1)
-          MenuDemoProto();
-        if (channel == -1)
-          MenuDigitalOut2();
-      }
-      if (MenuID == 4)
-      {
-        if ((millis() - lastLCDredraw) > 300)
-        {
-          MenuDigitalIn1Live();
-          lastLCDredraw = millis();
-        }
-        if (channel == 1)
-          MenuDigitalIn2();
-      }
-
-      if (MenuID == 14)
-      {
-        if ((millis() - lastLCDredraw) > 300)
-        {
-          MenuDigitalInLiveInd();
-          lastLCDredraw = millis();
-        }
-        if (channel == 1)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 5)
-      {
-        if ((millis() - lastLCDredraw) > 300)
-        {
-          MenuDigitalIn2Live();
-          lastLCDredraw = millis();
-        }
-        if (channel == 1)
-          MenuDigitalIn3();
-        if (channel == -1)
-          MenuDigitalIn1();
-      }
-      if (MenuID == 6)
-      {
-        if ((millis() - lastLCDredraw) > 300)
-        {
-          MenuDigitalIn3Live();
-          lastLCDredraw = millis();
-        }
-        if (channel == 4)
-          MenuDigitalIn2();
-        if (channel == 5 && enterPressed == 1)
-          MenuDemoProto();
-      }
-      if (MenuID == 7)
-      {
-        if ((millis() - lastLCDredraw) > 300)
-        {
-          MenuAnalogIn1Live();
-          lastLCDredraw = millis();
-        }
-        if (channel == 5 && enterPressed == 1)
-          MenuDemoProto();
-      }
-
-      if (MenuID == 18)
-      {
-        if ((millis() - lastLCDredraw) > 268)
-        {
-          MenuAnalogIn20mALiveInd();
-          lastLCDredraw = millis();
-        }
-        if (channel == 4 && enterPressed == 1)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 19)
-      {
-        if ((millis() - lastLCDredraw) > 268)
-        {
-          MenuAnalogIn10VLiveInd();
-          lastLCDredraw = millis();
-        }
-        if (channel == 4 && enterPressed == 1)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 9)
-      {
-        if (channel == 0 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
-        {
-          TargetValue = backlightIntensity; // copy variable to be edited to 'Target value'
-          backlightIntensity = EditValue();
-          analogWrite(backlightPin, (map(backlightIntensity, 5, 0, 255, 0)));
-        }
-        if (channel == 1 && enterPressed == 1)
-          MenuParametersReset();
-        if (channel == 2 && enterPressed == 1)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 10)
-      {
-        if (channel == 4 && enterPressed == 1)
-          ResetParameters();
-        if (channel == 5 && enterPressed == 1)
-          MenuDemoInd();
-      }
-
-      if (MenuID == 16)
-      {
-        if (channel == 0 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
-        {
-          TargetValue = anOutCh1; // copy variable to be edited to 'Target value'
-          anOutCh1 = EditFloatValue();
-          Indio.analogWrite(1, anOutCh1, false);
-        }
-        if (channel == 1 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
-        {
-          TargetValue = anOutCh2; // copy variable to be edited to 'Target value'
-          anOutCh2 = EditFloatValue();
-          Indio.analogWrite(2, anOutCh2, false);
-        }
-        if (channel == 2 && enterPressed == 1)
-        {
-          Indio.analogWriteMode(1, mA);
-          Indio.analogWriteMode(2, mA);
-          Indio.analogWrite(1, 0, false);
-          Indio.analogWrite(2, 0, false);
-          MenuDemoInd();
-        }
-      }
-
-      if (MenuID == 17)
-      {
-        if (channel == 0 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
-        {
-          TargetValue = anOutCh1; // copy variable to be edited to 'Target value'
-          anOutCh1 = EditFloatValue();
-          Indio.analogWrite(1, anOutCh1, false);
-        }
-        if (channel == 1 && enterPressed == 1) // using 'value editing mode' to edit a variable using the UI
-        {
-          TargetValue = anOutCh2; // copy variable to be edited to 'Target value'
-          anOutCh2 = EditFloatValue();
-          Indio.analogWrite(2, anOutCh2, false);
-        }
-        if (channel == 2 && enterPressed == 1)
-        {
-          Indio.analogWriteMode(1, mA);
-          Indio.analogWriteMode(2, mA);
-          Indio.analogWrite(1, 0, false);
-          Indio.analogWrite(2, 0, false);
-          MenuDemoInd();
+          Config.ResetAll();
+          delay(1000);
+          NVIC_SystemReset(); // processor software reset
         }
       }
     }
@@ -1254,37 +664,54 @@ void Navigate()
 float EditValue() // a function to edit a variable using the UI - function is called by the main 'Navigate' UI control function and is loaded with a variable to be edited
 {
   row = channel;       // save the current cursor position so that after using the buttons for 'value editing mode' the cursor position can be reinstated.
-  channel = 0;         // reset the button counter so to avoid carrying over a value from the cursor.
   constrainEnc = 0;    // disable constrainment of button counter's range
   valueEditingInc = 1; // increment for each button press
   valueEditing = 1;    // flag to indicate that we are going into 'value editing mode'.
   enterPressed = 0;    // clears any possible accidental "Enter" presses that could have been caried over
+  int downLimit = 0;
+  int upLimit = 4;
   while (enterPressed != 1)
-  {                // stays in 'value editing mode' until enter is pressed
-    ReadButtons(); // check the buttons for any change
+  {                   // stays in 'value editing mode' until enter is pressed
+    Watchdog.reset(); // reset watchdog
+    ReadButtons();    // check the buttons for any change
     lcd.setCursor(0, 8 * (row + 1));
     lcd.print("*");
     if (channel != lastChannel)
     { // when up or down button is pressed
-      if (channel < lastChannel && TargetValue <= 4)
+      if (MenuLevel == 2 && MenuID == 1)
+      {
+        if (row == 1)
+        {
+          downLimit = 0;
+          upLimit = 2;
+        } // baudrate
+        if (row == 4 || row == 5)
+        {
+          downLimit = 0;
+          upLimit = 999;
+        } // temperature range
+      }
+      if (channel < lastChannel && TargetValue <= upLimit)
       {                                 // if 'Up' button is pressed, and is within constraint range.
         TargetValue += valueEditingInc; // increment target variable with pre-defined increment value
       }
-      if (channel > lastChannel && TargetValue > 0)
+      if (channel > lastChannel && TargetValue > downLimit)
       {                                 // if 'Down' button is pressed, and is within constraint range.
         TargetValue -= valueEditingInc; // decrement target variable with pre-defined increment value
       }
       // clear a section of a row to make space for updated value
-      for (int i = 60; i <= 70; i++)
-      {
-        lcd.setDrawColor(0);
-        lcd.drawBox(i, 8 * row, 6 * 3, 8 * (row + 1));
-        lcd.setDrawColor(1);
-      }
+      lcd.setDrawColor(0);
+      lcd.drawBox(79, 8 * row, 128 - 79, 8);
       // print updated value
-      lcd.setCursor(66, 8 * (row + 1));
+      lcd.setDrawColor(1);
+      lcd.setCursor(79, 8 * (row + 1));
+#if __DEBUG__
       SerialUSB.println(TargetValue);
-      lcd.print(TargetValue, 0);
+#endif
+      if (MenuLevel == 2 && MenuID == 1 && row == 1)
+        lcd.print(BAUDRATE[(byte)TargetValue]);
+      else
+        lcd.print(TargetValue, 0);
       lastChannel = channel;
     }
     // delay(50);
@@ -1292,7 +719,6 @@ float EditValue() // a function to edit a variable using the UI - function is ca
   }
   channel = row;      // load back the previous row position to the button counter so that the cursor stays in the same position as it was left before switching to 'value editing mode'
   constrainEnc = 1;   // enable constrainment of button counter's range so to stay within the menu's range
-  channelUpLimit = 2; // upper row limit
   valueEditing = 0;   // flag to indicate that we are leaving 'value editing mode'
   enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over
   return TargetValue; // return the edited value to the main 'Navigate' UI control function for further processing
@@ -1301,37 +727,120 @@ float EditValue() // a function to edit a variable using the UI - function is ca
 float EditFloatValue() // a function to edit a variable using the UI - function is called by the main 'Navigate' UI control function and is loaded with a variable to be edited
 {
   row = channel;         // save the current cursor position so that after using the buttons for 'value editing mode' the cursor position can be reinstated.
-  channel = 0;           // reset the button counter so to avoid carrying over a value from the cursor.
   constrainEnc = 0;      // disable constrainment of button counter's range
   valueEditingInc = 0.5; // increment for each button press
   valueEditing = 1;      // flag to indicate that we are going into 'value editing mode'.
   enterPressed = 0;      // clears any possible accidental "Enter" presses that could have been caried over
   while (enterPressed != 1)
-  {                // stays in 'value editing mode' until enter is pressed
-    ReadButtons(); // check the buttons for any change
+  {                   // stays in 'value editing mode' until enter is pressed
+    Watchdog.reset(); // reset watchdog
+    ReadButtons();    // check the buttons for any change
     lcd.setCursor(0, 8 * (row + 1));
     lcd.print("*");
     if (channel != lastChannel)
     { // when up or down button is pressed
+      if (MenuLevel == 2 && MenuID == 1)
+      { // oxygen range
+        valueEditingInc = 0.5;
+        if (row == 2)
+        {
+          anOutDownLimit = 0.5;
+          anOutUpLimit = 9.5;
+        }
+        if (row == 3)
+        {
+          anOutDownLimit = 0.5;
+          anOutUpLimit = 19.5;
+        }
+      }
+      if (MenuLevel == 3 && MenuID == 1)
+      { // output calibration
+        int i = 0;
+        valueEditingInc = 0.005;
+        if (row == i || row == (i + 2))
+        {
+          anOutDownLimit = 3;
+          anOutUpLimit = 5;
+        }
+        i++;
+        if (row == i || row == (i + 2))
+        {
+          anOutDownLimit = 19;
+          anOutUpLimit = 21;
+        }
+      }
       if (channel < lastChannel && TargetValue <= anOutUpLimit)
       {                                 // if 'Up' button is pressed, and is within constraint range.
         TargetValue += valueEditingInc; // increment target variable with pre-defined increment value
       }
-      if (channel > lastChannel && TargetValue > 0)
+      if (channel > lastChannel && TargetValue >= anOutDownLimit)
       {                                 // if 'Down' button is pressed, and is within constraint range.
         TargetValue -= valueEditingInc; // decrement target variable with pre-defined increment value
       }
       // clear a section of a row to make space for updated value
-      for (int i = 35; i <= 50; i++)
-      {
-        lcd.setDrawColor(0);
-        lcd.drawBox(i, 8 * row, 6 * 3, 8 * (row + 1));
+      int stringWidth;
+      char S[10];
+      lcd.setDrawColor(0);
+      if (MenuLevel == 2 && MenuID == 1)
+      { // oxygen range
+        floatToString(TargetValue, S, sizeof(S), 1);
+        stringWidth = lcd.getStrWidth(S);
+        lcd.drawBox(79, 8 * row, lcd.getStrWidth("00.0 E-00"), 8);
         lcd.setDrawColor(1);
+        lcd.setCursor(79, 8 * (row + 1));
+        lcd.print(S);
+        lcd.setCursor(79 + stringWidth + 1, 8 * (row + 1));
+        if (row == 2)
+        {
+          lcd.print("E-06");
+        }
+        else if (row == 3)
+        {
+          lcd.print("E-02");
+        }
+      }
+      else if (MenuLevel == 3 && MenuID == 1)
+      { // output calibration
+        float fx = 0;
+        lcd.drawBox(92, 8 * row, 128 - 92, 8);
+        if (row == 0)
+        {
+          fx = remap(4.0, 4.0, 20.0, TargetValue, Config.analogs[4].base_max);
+          Indio.analogWrite(1, fx, false);
+          lcd.setCursor(98, 8 * (row + 1));
+        }
+        if (row == 1)
+        {
+          fx = remap(20.0, 4.0, 20.0, Config.analogs[4].base_min, TargetValue);
+          Indio.analogWrite(1, fx, false);
+          lcd.setCursor(92, 8 * (row + 1));
+        }
+        if (row == 2)
+        {
+          fx = remap(4.0, 4.0, 20.0, TargetValue, Config.analogs[5].base_max);
+          Indio.analogWrite(2, fx, false);
+          lcd.setCursor(98, 8 * (row + 1));
+        }
+        if (row == 3)
+        {
+          fx = remap(20.0, 4.0, 20.0, Config.analogs[5].base_min, TargetValue);
+          Indio.analogWrite(2, fx, false);
+          lcd.setCursor(92, 8 * (row + 1));
+        }
+        lcd.setDrawColor(1);
+        lcd.print(TargetValue, 3);
+      }
+      else
+      {
+        lcd.drawBox(79, 8 * row, 128 - 79, 8);
+        lcd.setCursor(79, 8 * (row + 1));
+        lcd.setDrawColor(1);
+        lcd.print(TargetValue, 1);
       }
       // print updated value
-      lcd.setCursor(35, 8 * (row + 1));
+#if __DEBUG__
       SerialUSB.println(TargetValue);
-      lcd.print(TargetValue, 2);
+#endif
       lastChannel = channel;
     }
     // delay(50);
@@ -1339,7 +848,6 @@ float EditFloatValue() // a function to edit a variable using the UI - function 
   }
   channel = row;      // load back the previous row position to the button counter so that the cursor stays in the same position as it was left before switching to 'value editing mode'
   constrainEnc = 1;   // enable constrainment of button counter's range so to stay within the menu's range
-  channelUpLimit = 2; // upper row limit
   valueEditing = 0;   // flag to indicate that we are leaving 'value editing mode'
   enterPressed = 0;   // clears any possible accidental "Enter" presses that could have been caried over
   return TargetValue; // return the edited value to the main 'Navigate' UI control function for further processing
@@ -1363,7 +871,9 @@ void ReadButtons()
     }
     lastBtnEnt = millis();
     lastAdminActionTime = millis();
-    SerialUSB.println(enterPressed);
+#if __DEBUG__
+    SerialUSB.println(enterPressed ? "EnterPressed" : "");
+#endif
   }
   prevBtnEnt = buttonEnterState;
 
@@ -1375,7 +885,9 @@ void ReadButtons()
     }
     lastBtnUp = millis();
     lastAdminActionTime = millis();
-    // SerialUSB.println("UpPressed");
+#if __DEBUG__
+    SerialUSB.println("UpPressed");
+#endif
   }
   prevBtnUp = buttonUpState;
 
@@ -1387,7 +899,9 @@ void ReadButtons()
     }
     lastBtnDown = millis();
     lastAdminActionTime = millis();
-    // SerialUSB.println("DownPressed");
+#if __DEBUG__
+    SerialUSB.println("DownPressed");
+#endif
   }
   prevBtnDown = buttonDownState;
 
@@ -1437,14 +951,6 @@ void SetInput()
   pinMode(D15, INPUT);
   pinMode(D16, INPUT);
   pinMode(D17, INPUT);
-}
-
-void ResetParameters()
-{ // resets the setup parameters of Industruino and saves the settings to EEPROM
-
-  backlightIntensity = backlightIntensityDef;                         // load the default backlight intensity value
-  analogWrite(backlightPin, (map(backlightIntensity, 5, 0, 255, 0))); // map the value (from 0-5) to a corresponding PWM value (0-255) and update the output
-  MenuSetup();                                                        // return to the setup menu
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------
